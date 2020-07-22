@@ -1,0 +1,585 @@
+---
+title: "Zaawansowane pakiety statystyczne - projekt"
+output:
+  html_notebook:
+    toc: yes
+  word_document:
+    toc: yes
+    toc_depth: '4'
+  pdf_document:
+    df_print: kable
+    keep_tex: yes
+    toc: yes
+    toc_depth: '4'
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_depth: '4'
+---
+
+# Wstêp
+
+Prognozy szeregów czasowych s¹ szeroko wykorzystywane w zakresie dzia³añ gospodarczych, politycznych, czy w zarz¹dzaniu finansowym m.in. do okreœlenia bud¿etu stanowego i lokalnego. Kluczowe elementy prognozowania ekonomicznego obejmuj¹ wybór modeli prognostycznych odpowiednich dla danego problemu, jego ocene i przekazanie niepewnoœci zwi¹zanej z prognoz¹ oraz zabezpieczenie przed niestabilnoœci¹ modelu.
+
+Do prognozowania naszego problemu podeszliœmy dwustopniowo: wykorzystuj¹c metodê szeregów czasowych i strukturalne modele ekonometryczne. Szeregi czasowe traktuj¹ dane jak "przewodnik" i polegaj¹ na przesz³ych wzorcach danych, które przewiduj¹ przysz³oœæ, wykorzystuj¹c informacje o trendzie, czy sezonowoœci z poprzednich lat. Korzystaj¹ one równoczeœnie z o wiele mniejszej iloœci zmiennych w porównaniu do modelu ekonometrycznego, który ma tendencje do du¿ych uk³adów równañ, które czasami zawieraj¹ setki zmiennych.
+
+## Sformu³owanie problemu
+
+Wybór postaci modelu ekonometrycznego estymowanego w naszym projekcie umo¿liwi prognozowanie ceny chleba  w z³otówkach za 0,5kg na podstawie wahañ cenowych rynku na terenie Polski. 
+
+# 1. Materia³y
+
+W wybranych przez nas potencjalnych zmiennych objaœnianych g³ówn¹ czêœæ stanowi¹ ziarna zbó¿ uprawianych w Polsce, natomiast pozosta³e z nich stanowi¹ zmienne, które uznaliœmy za ciekawe aby sprawdziæ ich wp³yw na nasz¹ zmienn¹ objaœnian¹. Zainteresowa³o nas sprawdzenie, czy istotny wp³yw na cenê chleba maj¹ równie¿ takie produkty jak piwo, ser twarogowy czy mas³o oraz pó³produkt, jakim jest m¹ka pszenna. Dane do naszego projektu pozyskaliœmy z ( Przemo tylko Ty wiesz sk¹d xd ) a zdecydowaliœmy siê na wybranie danych iloœciowych z okresu oœmioletniego od stycznia 2012 do grudnia 2019. Przed przyst¹pieniem do estymacji naszego modelu podzieliliœmy nasze dane na zbiór ucz¹cy (6lat) oraz zbiór testowy (2lata).
+
+```{r, include = FALSE, warning=FALSE}
+data = read.table(file = 'C:/Users/julia/Documents/bioinformatyka/semestrIX/pakiety_statystyczne/projekt/Dane-kompletne(1).csv', header = F, sep = ';')
+
+dane = data
+#usuwamy 1 kolumne zawieraj¹ce daty
+#dane = data[2:10]
+
+#zmiana nazw kolumn
+colnames(dane) <- c('Y','X1','X2','X3','X4','X5','X6','X7','X8')
+head(dane)
+
+#sprawdzamy czy dane zawieraja brakujace wartosci
+table(is.na(dane))
+```
+```{r, echo=FALSE, warning=FALSE}
+#Podsumowanie danych
+summary(dane)
+
+#dane zawieraja 2 brakujace wartosci w ostatnim wierszu dla X5 i X6
+#imputacja z wykorzytsaniem sredniej
+library(Hmisc)
+
+dane$X5 <- impute(dane$X5,mean)
+dane$X6 <- impute(dane$X6,mean)
+
+#Podzielenie danych na zbior uczacy i testowy.
+dane.ucz = dane[1:72,1:9]
+dane.test = dane[73:96,1:9]
+
+boxplot(dane, main = "Dane z late 2012- 2019")
+boxplot(dane.ucz, main = "Dane ucz¹ce z lat 2012 - 2018")
+boxplot(dane.test, main = "Dane testowe z roku 2019")
+```
+
+Na podstawie wykresu mo¿na zauwa¿yæ:
+trend (wielomianowy?)
+brak wahañ sezonowych
+wahania przypadkowe
+
+```{r, echo=FALSE, warning=FALSE}
+library(forecast)
+
+#³adowanie danych
+chleb = data$V2
+
+#dzielienie danych
+chleb.ucz = chleb[0:72]     # od 01.2012
+chleb.test = chleb[73:96]   # od 01.2018
+
+#utworzenie szeregu czasowego dla zbioru ucz¹cego
+chleb.ucz.ts = ts(chleb.ucz, start = c(2012,1), frequency = 12)
+chleb.ucz.ts
+tsdisplay(chleb.ucz.ts)
+lag.plot(chleb.ucz.ts,lag=12, do.lines=F) # jakieœ wnioski tutaj?
+```
+
+
+# 2. Metody
+
+Do predykcji ceny chleba u¿yliœmy modelu ekonometrycznego i szeregów czasowych.
+
+## Model ekonometryczny
+
+### Macierz korelacji
+
+```{r}
+#Macierz korelacji
+R = cor(dane.ucz)
+R0 = R[2:9,1]     #Wektor korealcji zmiennej objaœnianej do objaœniaj¹cych
+R = R[2:9,2:9]    #Macierz korelacji zmiennych objaœniaj¹cych
+
+R0
+R
+```
+
+### Metoda grafowa
+```{R}
+#--Metoda grafowa
+#W ka¿dym wierszu macierzy R wybieram najwy¿sz¹ liczbê
+#Macierz tymczasowa (abs i zamiana 1.0 aby nie wybiera³o ichz  funckji max)
+R.temp = abs(R)
+R.temp[R.temp == 1.0] <- 0
+R.temp
+
+R.graf0 = apply(R.temp,1,max) #r*- macierz z wartoœciami najwy¿szymi
+R.graf0
+R.min = min(R.graf0) #<- wart. min z wektora
+R.min
+
+#Macierz do rysowania grafu
+R.graf1 = R
+R.graf1[R.graf1<R.min] <- 0
+R.graf1
+
+#Grafw zeszycie
+
+#Model z metody grafóW
+
+# y = alfa0 + alfa1*X4 + alfa2*X8 + b³ad
+```
+
+### Metoda analizy wspó³czynników korelacji
+```{r}
+#--Metoda analiza wspó³czyników korelacji
+
+# polecenie qt(a,b) <- jak z tablic t-studenta
+R.wspol = sqrt((qt(0.975,72))^2/(qt(0.975,72)+72))
+R.wspol
+
+#Krok 1 eliminacja z R0 wartoœci <= R.wspol
+R0.wspol = abs(R0)
+R0.wspol[R0.wspol>R.wspol]
+
+#Krok 2 wybór najsilniej skorelowanej zmiennej 
+Xh = max(R0.wspol)
+indeks = which.max(R0.wspol)
+
+Xh
+indeks
+
+#Krok 3 eliminacja zmiennych skorelowanych X8 gdzie wartoœc korelacji > ni¿ R.wspol
+R.wspol1 = abs(R[indeks,1:indeks])
+R.wspol1[R.wspol1 > R.wspol] = 0
+X1Rwspol1 = max(R.wspol1)
+indeksX1Rwspol1 = which.max(R.wspol1)
+X1Rwspol1
+indeksX1Rwspol1
+
+#Model na podstawie metody analizy wspó³czyników
+# y = alfa0 + alfa1*X1 + blad
+```
+
+### Metoda pojemnoœci informacji
+```{r}
+# -- Metoda pojemnoœci informacji
+library(gtools)
+
+ao.hellwig <- function(NumOfVar, VarSet, CorrMethod) {
+
+   WybraneZmienne <- array();
+
+   tmpH <- 0;
+   maxH <- 0;
+
+   TablicaKorelacji <- cor(VarSet, method=CorrMethod);
+
+   Lista <- list();
+
+	for( i in 1: (NumOfVar-1) ) {
+
+	    Lista[[i]] <- combinations( (NumOfVar-1), i, 2:NumOfVar, repeats=FALSE);
+
+	}
+
+        for(KtoryRzadKombinacji in 1:length(Lista)) {
+            
+            H<-array();
+
+            for( KtoraKombinacja in 1: length(Lista[[ KtoryRzadKombinacji ]][, 1]) ) {
+
+	          h<-array();
+
+                  for( KtoryIndexZmiennej in 1:length( Lista[[ KtoryRzadKombinacji ]][ KtoraKombinacja, ])) {
+
+                      Zmienna <- Lista[[ KtoryRzadKombinacji ]][ KtoraKombinacja, KtoryIndexZmiennej ];
+
+                      RXY <- ( TablicaKorelacji[ Zmienna, 1] )^2;
+
+                      Zmienne <- Lista[[ KtoryRzadKombinacji ]][ KtoraKombinacja, ];
+                      
+                      SumaKorelacji <- 0;
+
+		      for(k in Zmienne) {
+
+                           SumaKorelacji <- SumaKorelacji + abs( TablicaKorelacji[k, Zmienna] );
+                      }
+
+		      h[ KtoryIndexZmiennej ] <- RXY / SumaKorelacji;
+		   }
+
+                   tmpH <- sum(h);
+	                   
+                   if(tmpH > maxH) {
+	                maxH = tmpH;
+                        WybraneZmienne <- Zmienne;
+                   }
+            }
+       }
+
+   return(WybraneZmienne);
+}
+ao.hellwig(9, dane.ucz, "pearson")
+```
+
+
+```{r}
+#Sprawdzanie czy zale¿noœæ Y do poszczególnych zmiennych jest liniowa.
+# wykresy korelacyjne
+cor.test(dane.ucz$Y, dane.ucz$X1) #0.62 zale¿noœæ umairkowana
+cor.test(dane.ucz$Y, dane.ucz$X4) #-0.42 zale¿noœæ umairkowana- niska
+cor.test(dane.ucz$Y, dane.ucz$X8) #0.63 zale¿noœæ umairkowana
+
+# X1
+plot(dane.ucz$Y~dane.ucz$X1, col = "grey", pch = 20, cex = 1.5,
+     main = "Zale¿noœæ Y do X1")
+abline(lm(dane.ucz$Y~dane.ucz$X1), col = "darkorange", lwd = 2)
+
+# X4
+plot(dane.ucz$Y~dane.ucz$X4, col = "grey", pch = 20, cex = 1.5,
+     main = "Zale¿noœæ Y do X4")
+abline(lm(dane.ucz$Y~dane.ucz$X4), col = "darkorange", lwd = 2)
+
+# X8
+plot(dane.ucz$Y~dane.ucz$X8, col = "grey", pch = 20, cex = 1.5,
+     main = "Zale¿noœæ Y do X4")
+abline(lm(dane.ucz$Y~dane.ucz$X8), col = "darkorange", lwd = 2)
+
+
+
+# MODEL 1
+# y = alfa0 + alfa1*X1 + blad
+
+#X1
+cor.test(dane.ucz$Y,dane.ucz$X1) #0.62
+plot(dane.ucz$Y~dane.ucz$X1)
+
+model1 = lm(dane.ucz$Y~dane.ucz$X1)
+summary(model1)
+reszty1 = c(residuals(model1))
+library(moments)
+skewness(reszty1) #prawoskoœnoœæ
+kurtosis(reszty1)-3 #kurtoza jest dodatnia, wartoœci cechy mniej skoncentrowane ni¿ przy rozk³adzie normalnym
+shapiro.test(reszty1) #p<0.05 brak rozk. normalny
+
+
+x = (dane.ucz$X1)^2
+cor.test(dane.ucz$Y, x) #0.6354452 
+plot(dane.ucz$Y, x)
+model1x = lm(dane.ucz$Y~x)
+summary(model1x)
+reszty1x = c(residuals(model1x))
+shapiro.test(reszty1x) #p<0.05 brak rozk. normalny
+
+x1 = (dane.ucz$X1)^3
+cor.test(dane.ucz$Y, x1) #0.6422628 
+plot(dane.ucz$Y, x1)
+model1x1 = lm(dane.ucz$Y~x1)
+summary(model1x1)
+reszty1x1 = c(residuals(model1x1))
+shapiro.test(reszty1x1) #p<0.05 brak rozk. normalny
+
+x2 = sqrt(dane.ucz$X1)
+model1x2 = lm(dane.ucz$Y~x2)
+summary(model1x2)
+reszty1x2 = c(residuals(model1x2))
+shapiro.test(reszty1x2) #p<0.05 brak rozk. normalny
+
+x3 = log10(dane.ucz$X1)
+model1x3 = lm(dane.ucz$Y~x3)
+summary(model1x3)
+reszty1x3 = c(residuals(model1x3))
+shapiro.test(reszty1x3) #p<0.05 brak rozk. normalny
+
+x4 = 1/(dane.ucz$X1)
+model1x4 = lm(dane.ucz$Y~x4)
+summary(model1x4)
+reszty1x4 = c(residuals(model1x4))
+shapiro.test(reszty1x4) #p<0.05 brak rozk. normalny
+
+x5 = 1/(dane.ucz$X1)^2
+model1x5 = lm(dane.ucz$Y~x5)
+summary(model1x5)
+reszty1x5 = c(residuals(model1x5))
+shapiro.test(reszty1x5) #p<0.05 brak rozk. normalny
+
+
+# MODEL 2
+## y = alfa0 + alfa1*X4 + alfa2*X8 
+model2 = lm(dane.ucz$Y~dane.ucz$X4 + dane.ucz$X8)
+summary(model2)
+reszty2 = c(residuals(model2))
+shapiro.test(reszty2) #p<0.05 brak rozk. normalny
+
+#X4
+cor.test(dane.ucz$Y,dane.ucz$X4) #-0.4234788
+plot(dane.ucz$Y~dane.ucz$X4)
+
+#X8
+cor.test(dane.ucz$Y,dane.ucz$X8) #0.6289793 
+plot(dane.ucz$Y~dane.ucz$X8)
+
+#odrzucam X4
+model2x = lm(dane.ucz$Y~dane.ucz$X8)
+summary(model2x)
+reszty2x = c(residuals(model2x))
+shapiro.test(reszty2x) #p<0.05 brak rozk. normalny
+
+z = (dane.ucz$X8)^2
+cor.test(dane.ucz$Y, z) #0.6212224 
+model2z = lm(dane.ucz$Y~z)
+summary(model2z)
+reszty2z = c(residuals(model2z))
+shapiro.test(reszty2z)
+
+z1 = (dane.ucz$X8)^3
+cor.test(dane.ucz$Y, z1) #0.6128301 
+model2z1 = lm(dane.ucz$Y~z1)
+summary(model2z1)
+reszty2z1 = c(residuals(model2z1))
+shapiro.test(reszty2z1)
+
+z2 = sqrt(dane.ucz$X8)
+cor.test(dane.ucz$Y, z2) #0.6128301 
+model2z2 = lm(dane.ucz$Y~z2)
+summary(model2z2)
+reszty2z2 = c(residuals(model2z2))
+shapiro.test(reszty2z2)
+
+z3 = log(dane.ucz$X8)
+cor.test(dane.ucz$Y, z3) #0.6128301 
+model2z3 = lm(dane.ucz$Y~z3)
+summary(model2z3)
+reszty2z3 = c(residuals(model2z3))
+shapiro.test(reszty2z3)
+
+z4 = 1/(dane.ucz$X8)
+cor.test(dane.ucz$Y, z4) #0.6128301 
+model2z4 = lm(dane.ucz$Y~z4)
+summary(model2z4)
+reszty2z4 = c(residuals(model2z4))
+shapiro.test(reszty2z4)
+
+z5 = 1/(dane.ucz$X8)
+cor.test(dane.ucz$Y, z5) #0.6128301 
+model2z5 = lm(dane.ucz$Y~z5)
+summary(model2z5)
+reszty2z5 = c(residuals(model2z5))
+shapiro.test(reszty2z5)
+
+z6 = 1/(dane.ucz$X8)^3
+cor.test(dane.ucz$Y, z6) #0.6128301 
+model2z6 = lm(dane.ucz$Y~z6)
+summary(model2z6)
+reszty2z6 = c(residuals(model2z6))
+shapiro.test(reszty2z6)
+
+
+# MODEL 3
+# y = alfa + alfa1*X1 + alfa2*X8 + blad
+model3 = lm(dane.ucz$Y~dane.ucz$X1 + dane.ucz$X8)
+summary(model3)
+plot(model3)
+reszty3 = c(residuals(model3))
+mean(reszty3) #-2.644625e-19 blisko zero, wiêc ok
+skewness(reszty3) #-0.6542511 lekko lewoskoœny
+shapiro.test(reszty3) # W = 0.9505, p-value = 0.006637
+
+#X1
+cor.test(dane.ucz$Y,dane.ucz$X1) #-0.4234788 
+plot(dane.ucz$Y~dane.ucz$X1)
+
+x = (dane.ucz$X1)^2
+cor.test(dane.ucz$Y, x) #-0.4210257
+plot(dane.ucz$Y, x)
+
+x1 = (dane.ucz$X1)^3
+cor.test(dane.ucz$Y, x1) #-0.4185401 
+plot(dane.ucz$Y, x1)
+
+
+#X8
+cor.test(dane.ucz$Y,dane.ucz$X8) #0.6289793 
+plot(dane.ucz$Y~dane.ucz$X8)
+
+z = (dane.ucz$X8)^2
+cor.test(dane.ucz$Y, z) #0.6212224 
+plot(dane.ucz$Y, z)
+
+z1 = (dane.ucz$X8)^3
+cor.test(dane.ucz$Y, z1) #0.6128301 
+plot(dane.ucz$Y, z1)
+
+model = lm(dane.ucz$Y~x1+z)
+summary(model)
+
+reszty = c(residuals(model))
+mean(reszty) # 8.042107e-19 bliskie zeru, wiêc ok
+library(moments)
+skewness(reszty) # -0.7290412 lewoskoœnoœæ
+kurtosis(reszty)-3 # 0.7879884 wartoœci cechy bardziej skoncentrowane ni¿ przy rozk³adzie normalnym
+shapiro.test(reszty)# W = 0.95396, p-value = 0.0102 na poziomie alfa = 0.01
+library(lmtest)
+dwtest(Y~x1+z, data =dane.ucz) #DW = 0.52631, p-value = 2.773e-15 istnieje korelacja
+
+##konieczne jest Przekszta³cenie Cochran'a- Orcutta
+#Test Cochrane'a -Orcutta
+library(orcutt)
+test.coch = cochrane.orcutt(model) # Model 1 Chochrane'a Orcuta - Y = 2.087 + 0.022*X1 + 0.0007*X8
+reszty.coch = test.coch$residuals
+reszty.coch = residual.orcutt(test.coch) #czy to to samo?
+mean(reszty.coch) #-0.006834632 bliskie zero, wiêc ok
+skewness(reszty.coch) #0.3408216 prawoskoœnoœæ
+kurtosis(reszty.coch)-3 #wartoœci mniej skoncentrowane
+shapiro.test(reszty.coch) #W = 0.95783, p-value = 0.0167 jest ok :D
+dwtest(test.coch) #DW = 2.0919, p-value = 0.6129 jest ok :D -> wiemy to z summary(test.coch)
+bgtest(test.coch, order = 2) #LM test = 1.3275, df = 2, p-value = 0.5149
+bgtest(test.coch, order = 3) #LM test = 3.5276, df = 3, p-value = 0.3172
+
+library(lawstat)
+symmetry.test(reszty.coch) #Test statistic = 1.9969, p-value = 0.082
+#heteroskedastycznoœæ
+library(lmtest)
+bptest(test.coch) #BP = 2.2162, df = 2, p-value = 0.3302 jest ok :)
+
+#liniowoœæ modelu-> popracowaæ nad tym-> ???
+harvtest(test.coch) #HC = 0.17961, df = 67, p-value = 0.858
+raintest(test.coch) #Rain = 1.2802, df1 = 36, df2 = 32, p-value = 0.2406
+resettest(test.coch) #RESET = 1.0293, df1 = 2, df2 = 66, p-value = 0.3629
+
+leverage = hat(model.matrix(test.coch))
+plot(leverage)
+
+```
+
+
+
+## Szeregi czasowe
+
+### Ró¿nicowanie
+Z szergu czasowego usuniêty zosta³ trend.
+```{r, echo = FALSE}
+#usuniêcie trendu
+chleb.ucz.ts.diff = diff(chleb.ucz.ts)
+
+# Wykresy porównawcze
+par(mfrow=c(2,1))
+ts.plot(chleb.ucz.ts)
+ts.plot(chleb.ucz.ts.diff)
+```
+
+### Dekompozycja
+
+```{r}
+#---Dekompozycja
+#dekompozycja na si³e usuwa sezonowœæ tu chyba której de facto 
+#wg mnie nie ma wiêc nie wiem czy wypada to robiæ?
+
+chleb.ucz.ts.deco = decompose(chleb.ucz.ts)
+plot(chleb.ucz.ts.deco)
+reszty_deco = (chleb.ucz.ts.deco$random)
+```
+
+### Metoda regresji
+```{r}
+#---Metoda regresji
+
+chleb.ucz.ts.tslm = tslm(chleb.ucz.ts ~ trend)
+summary(chleb.ucz.ts.tslm)
+# R2 = 0.005 mega s³abo
+reszty_tslm = chleb.ucz.ts.tslm$residuals
+
+# ACF-y
+par(mfrow=c(3,1))
+Acf(chleb.ucz.ts.diff)  #MA = 9  
+Acf(reszty_deco)        #MA = 1
+Acf(reszty_tslm)        #MA = 9  widaæ nadal trend ?
+
+# PACF-y
+par(mfrow=c(3,1))
+Pacf(chleb.ucz.ts.diff)  #AR = 14  #3
+Pacf(reszty_deco)        #AR = 12
+Pacf(reszty_tslm)        #AR = 1
+```
+
+
+# 3. Wyniki
+
+## Model ekonometryczny
+
+```{r}
+predict(test.coch)
+fitted(test.coch)
+residuals(test.coch)
+```
+
+
+## Szeregi czasowe
+
+```{r, include = FALSE}
+#-------Modele
+
+#MA 9
+model.chlebMA9 = Arima(chleb.ucz.ts, order = c(0,1,9))
+model.chlebMA9 # AIC -493,94  NAJLEPSZY !
+
+#MA 1
+model.chlebMA1 = Arima(chleb.ucz.ts, order = c(0,1,1))
+model.chlebMA1 # AIC -489,53
+
+#AR 14
+model.chlebAR14 = Arima(chleb.ucz.ts, order = c(14,1,0))
+model.chlebAR14 # AIC -488,63
+
+#AR 3  # ERROR NIE WIEM CZEMU? #TUAJ TEN JEST NAJLEPSZY
+model.chlebAR12 = Arima(chleb.ucz.ts, order = c(3,1,0))
+model.chlebAR12 # AIC ??
+
+#AR 1
+model.chlebAR1 = Arima(chleb.ucz.ts, order = c(1,1,0))
+model.chlebAR1 # AIC  -489,59
+
+#Model automatyczny
+model.chleb.auto = auto.arima(chleb.ucz.ts)
+model.chleb.auto
+
+# Model rêczny najlepszy MA9 -  ARIMA (0,1,9)  automat sugeruje ARIMA(0,2,1) 
+# Jednak jego AIC i tak jest wy¿szy ni¿ naszego MA9.
+
+```
+
+```{r}
+
+#-------Progonozy
+# nasze h = 24
+
+chleb.forecast = forecast(model.chlebMA9, h=24)
+chleb.forecast
+
+# Wykres
+chleb.ts = ts(chleb, start(2012,1),frequency = 12)
+
+par(mfrow=c(2,1))
+plot(chleb.forecast)
+plot(chleb.ts)
+
+#-------Regresja
+
+#Nie wiem czy dobrze?
+chleb.forecast.dane = chleb.forecast$mean
+
+reg = lm(chleb.test ~chleb.forecast.dane)
+summary(reg)
+plot(reg)
+
+# W³aœciwe brak zaleznoœci prognoz do wartoœci ze zbioru testowego. 
+# Wynika to z faktu i¿ analizuj¹c ca³y zbiór mo¿na zauwa¿yæ ¿e w ci¹gu 
+# 2 ostatnich lat cena chleba znacz¹co wzros³a ( du¿o bardziej ni¿ wyznacza³by to trend)
+# ???
+```
+
+
+# 4. Podsumowanie
